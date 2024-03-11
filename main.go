@@ -32,12 +32,12 @@ package main
 
 import (
 	"bufio"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"time"
+	"unsafe"
 )
 
 // see Documentation/vm/pagemap.txt:
@@ -68,7 +68,7 @@ var (
 	g_activepages = 0
 	g_walkedpages = 0
 	g_idlepath    = "/sys/kernel/mm/page_idle/bitmap"
-	g_idlebuf     = make([]byte, MAX_IDLEMAP_SIZE*NUM_BYTE_64)
+	g_idlebuf     = make([]uint64, MAX_IDLEMAP_SIZE)
 	g_idlebufsize uint64
 )
 
@@ -88,7 +88,7 @@ func mapidle(pid int, mapstart, mapend uint64) error {
 	pagebufsize := (PAGEMAP_CHUNK_SIZE * (mapend - mapstart)) / uint64(pagesize)
 
 	// create a pagebuf which is equivalent to pagebufsize in bytes
-	pagebuf := make([]byte, pagebufsize*NUM_BYTE_64)
+	pagebuf := make([]uint64, pagebufsize)
 
 	// open pagemap for virtual to PFN translation
 	pagepath := fmt.Sprintf("/proc/%d/pagemap", pid)
@@ -108,7 +108,7 @@ func mapidle(pid int, mapstart, mapend uint64) error {
 
 	// optimized: read this in one syscall, but do we need to read the file again and gain till the
 	// length == the bytes read ?
-	read, err := pagefd.Read(pagebuf)
+	read, err := pagefd.Read((*(*[]byte)(unsafe.Pointer(&pagebuf)))[:])
 	if err != nil {
 		return fmt.Errorf("Read page map failed %s", err)
 	}
@@ -116,19 +116,19 @@ func mapidle(pid int, mapstart, mapend uint64) error {
 		return fmt.Errorf("Read page map failed only read %d", read)
 	}
 
-	// reading byte by byte
+	// reading
 	// 1 unint64 is 8 bytes
-	for i = 0; i < pagebufsize-NUM_BYTE_64; i += NUM_BYTE_64 {
+	for i = 0; i < pagebufsize/8; i++ {
 
 		// convert virtual address p to physical PFN
-
-		pfn = binary.NativeEndian.Uint64(pagebuf[i:i+NUM_BYTE_64]) & PFN_MASK
+		//pfn = binary.LittleEndian.Uint64(pagebuf[i]) & PFN_MASK
+		pfn = pagebuf[i] & PFN_MASK
 		if pfn == 0 {
 			continue
 		}
 		// read idle bit
 		idlemapp = (pfn / 64) * BITMAP_CHUNK_SIZE
-		if ((idlemapp + NUM_BYTE_64) > g_idlebufsize) || ((idlemapp + NUM_BYTE_64) > uint64(len(g_idlebuf))) {
+		if ((idlemapp) > g_idlebufsize) || ((idlemapp) > uint64(len(g_idlebuf))) {
 			return fmt.Errorf("ERROR: bad PFN read from page map. read %d and buf size  %d, buf len %d", idlemapp, g_idlebufsize, len(g_idlebuf))
 		}
 
@@ -136,8 +136,8 @@ func mapidle(pid int, mapstart, mapend uint64) error {
 			fmt.Printf("Mapping idle page idlebuf %d idlemapp start %d idlemapp end %d \n", g_idlebufsize, idlemapp, idlemapp+NUM_BYTE_64)
 		}
 
-		idlebits = binary.NativeEndian.Uint64(g_idlebuf[idlemapp : idlemapp+NUM_BYTE_64])
-
+		//idlebits = binary.LittleEndian.Uint64(g_idlebuf[idlemapp : idlemapp+NUM_BYTE_64])
+		idlebits = g_idlebuf[idlemapp]
 		if g_debug > 1 {
 			fmt.Printf("R: p %llx pfn %llx idlebits %llx\n", pagebuf[i], pfn, idlebits)
 		}
@@ -207,6 +207,18 @@ func setidlemap() error {
 	return nil
 }
 
+/**
+
+// Read the bitmap into memory
+bitmap := make([]uint64, numBits/64)
+_, err = file.Read((*(*[]byte)(unsafe.Pointer(&bitmap)))[:])
+if err != nil {
+	fmt.Printf("Error reading bitmap: %v\n", err)
+	return
+}
+
+*/
+
 func loadidlemap() error {
 	idlefd, err := os.OpenFile(g_idlepath, os.O_RDONLY, 0644)
 	if err != nil {
@@ -215,7 +227,7 @@ func loadidlemap() error {
 	defer idlefd.Close()
 	count := 0
 	for {
-		n, err := idlefd.Read(g_idlebuf)
+		n, err := idlefd.Read((*(*[]byte)(unsafe.Pointer(&g_idlebuf))))
 		if err != nil {
 			if err != io.EOF {
 				return fmt.Errorf("Error reading file %s", err)
