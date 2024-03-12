@@ -207,17 +207,6 @@ func setidlemap() error {
 	return nil
 }
 
-/**
-
-// Read the bitmap into memory
-bitmap := make([]uint64, numBits/64)
-_, err = file.Read((*(*[]byte)(unsafe.Pointer(&bitmap)))[:])
-if err != nil {
-	fmt.Printf("Error reading bitmap: %v\n", err)
-	return
-}
-
-*/
 
 func loadidlemap() error {
 	idlefd, err := os.OpenFile(g_idlepath, os.O_RDONLY, 0644)
@@ -227,7 +216,7 @@ func loadidlemap() error {
 	defer idlefd.Close()
 	count := 0
 	for {
-		n, err := idlefd.Read((*(*[]byte)(unsafe.Pointer(&g_idlebuf))))
+		n, err := idlefd.Read((*(*[]byte)(unsafe.Pointer(&g_idlebuf)))[:])
 		if err != nil {
 			if err != io.EOF {
 				return fmt.Errorf("Error reading file %s", err)
